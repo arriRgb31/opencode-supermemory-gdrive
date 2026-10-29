@@ -1,0 +1,750 @@
+#!/usr/bin/env node
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import * as readline from "node:readline";
+import { startAuthFlow, clearCredentials, loadCredentials, CREDENTIALS_FILE } from "./services/auth.js";
+import { CONFIG, CONFIG_FILE, SUPERMEMORY_API_KEY, getApiBaseUrl, isConfigured, writeInstallDefaults } from "./config.js";
+import { SupermemoryClient } from "./services/client.js";
+import { getTags } from "./services/tags.js";
+import {
+  editOpenCodeConfig,
+  editOpenCodeTuiConfig,
+  readOpenCodeRegistration,
+  readOpenCodeTuiRegistration,
+  V1_PLUGIN_ENTRY,
+  V2_PLUGIN_ENTRY,
+} from "./services/opencode-config.js";
+
+const OPENCODE_CONFIG_DIR = join(homedir(), ".config", "opencode");
+const OPENCODE_COMMAND_DIRS = [
+  join(OPENCODE_CONFIG_DIR, "commands"),
+  join(OPENCODE_CONFIG_DIR, "command"),
+];
+const OPENCODE_TUI_CONFIGS = [
+  join(OPENCODE_CONFIG_DIR, "tui.jsonc"),
+  join(OPENCODE_CONFIG_DIR, "tui.json"),
+];
+const OH_MY_OPENCODE_CONFIG = join(OPENCODE_CONFIG_DIR, "oh-my-opencode.json");
+const DEFAULT_CONFIG_FILE = CONFIG_FILE ?? join(OPENCODE_CONFIG_DIR, "supermemory.json");
+
+const SUPERMEMORY_INDEX_COMMAND = `---
+description: Index this codebase into Supermemory
+---
+
+# Indexing Codebase into Supermemory
+
+You are initializing persistent memory for this codebase. This is not just data collection - you're building context that will make you significantly more effective across all future sessions.
+
+## Understanding Context
+
+You are a **stateful** coding agent. Users expect to work with you over extended periods - potentially the entire lifecycle of a project. Your memory is how you get better over time and maintain continuity.
+
+## What to Remember
+
+### 1. Procedures (Rules & Workflows)
+Explicit rules that should always be followed:
+- "Never commit directly to main - always use feature branches"
+- "Always run lint before tests"
+- "Use conventional commits format"
+
+### 2. Preferences (Style & Conventions)  
+Project and user coding style:
+- "Prefer functional components over class components"
+- "Use early returns instead of nested conditionals"
+- "Always add JSDoc to exported functions"
+
+### 3. Architecture & Context
+How the codebase works and why:
+- "Auth system was refactored in v2.0 - old patterns deprecated"
+- "The monorepo used to have 3 modules before consolidation"
+- "This pagination bug was fixed before - similar to PR #234"
+
+## Memory Scopes
+
+**Project-scoped** (\`scope: "project"\`):
+- Build/test/lint commands
+- Architecture and key directories
+- Team conventions specific to this codebase
+- Technology stack and framework choices
+- Known issues and their solutions
+
+**User-scoped** (\`scope: "user"\`):
+- Personal coding preferences relevant to this project
+- Communication style preferences
+- General workflow habits
+
+## Research Approach
+
+This is a **deep research** initialization. Take your time and be thorough (~50+ tool calls). The goal is to genuinely understand the project, not just collect surface-level facts.
+
+**What to uncover:**
+- Tech stack and dependencies (explicit and implicit)
+- Project structure and architecture
+- Build/test/deploy commands and workflows
+- Contributors & team dynamics (who works on what?)
+- Commit conventions and branching strategy
+- Code evolution (major refactors, architecture changes)
+- Pain points (areas with lots of bug fixes)
+- Implicit conventions not documented anywhere
+
+## Research Techniques
+
+### Ecosystem auto-detect
+Identify the language/ecosystem from manifests and configs **before** deep research. A repo may use more than one; research each that is present. Do not assume JavaScript/TypeScript.
+
+- **JS/TS**: package.json, bun.lock, bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json, tsconfig.json, jsconfig.json, deno.json, biome.json
+- **Python**: pyproject.toml, requirements.txt, setup.py, setup.cfg, Pipfile, poetry.lock, environment.yml, tox.ini
+- **Go**: go.mod, go.sum
+- **Rust**: Cargo.toml, Cargo.lock
+- **.NET/C#**: *.csproj, *.fsproj, *.vbproj, *.sln, nuget.config, Directory.Build.props, global.json
+- **Java/Kotlin**: pom.xml, build.gradle, build.gradle.kts, settings.gradle, settings.gradle.kts, gradlew
+- **Ruby**: Gemfile, Gemfile.lock, Rakefile, *.gemspec
+- **PHP**: composer.json, composer.lock
+- **Swift**: Package.swift, Package.resolved, *.xcodeproj, *.xcworkspace
+- **Elixir**: mix.exs, mix.lock
+
+Use the matching toolchain for commands, tests, and conventions (not JS/TS defaults unless that is the detected ecosystem).
+
+### File-based
+- README.md, CONTRIBUTING.md, AGENTS.md, CLAUDE.md
+- Package manifests for the detected ecosystem(s) (package.json, Cargo.toml, pyproject.toml, go.mod, *.csproj, pom.xml, build.gradle, Gemfile, composer.json, Package.swift, mix.exs)
+- Config files (.eslintrc, tsconfig.json, .prettierrc, pyproject.toml, .golangci.yml, rustfmt.toml, .editorconfig)
+- CI/CD configs (.github/workflows/, .gitlab-ci.yml, azure-pipelines.yml)
+
+### Git-based
+- \`git log --oneline -20\` - Recent history
+- \`git branch -a\` - Branching strategy  
+- \`git log --format="%s" -50\` - Commit conventions
+- \`git shortlog -sn --all | head -10\` - Main contributors
+
+### Explore Agent
+Fire parallel explore queries for broad understanding:
+\`\`\`
+Task(explore, "What is the tech stack and key dependencies?")
+Task(explore, "What is the project structure? Key directories?")
+Task(explore, "How do you build, test, and run this project?")
+Task(explore, "What are the main architectural patterns?")
+Task(explore, "What conventions or patterns are used?")
+\`\`\`
+
+## How to Do Thorough Research
+
+**Don't just collect data - analyze and cross-reference.**
+
+Bad (shallow):
+- Run commands, copy output
+- List facts without understanding
+
+Good (thorough):
+- Cross-reference findings (if inconsistent, dig deeper)
+- Resolve ambiguities (don't leave questions unanswered)
+- Read actual file content, not just names
+- Look for patterns (what do commits tell you about workflow?)
+- Think like a new team member - what would you want to know?
+
+## Saving Memories
+
+Use the \`supermemory\` tool for each distinct insight:
+
+\`\`\`
+supermemory(mode: "add", content: "...", type: "project-config"|"architecture"|"learned-pattern"|"error-solution"|"preference", scope: "project"|"user")
+\`\`\`
+
+**Types:**
+- \`project-config\` - tech stack, commands, tooling
+- \`architecture\` - codebase structure, key components, data flow
+- \`learned-pattern\` - conventions specific to this codebase
+- \`error-solution\` - known issues and their fixes
+- \`preference\` - coding style preferences (use with user scope)
+
+**Guidelines:**
+- Save each distinct insight as a separate memory
+- Be concise but include enough context to be useful
+- Include the "why" not just the "what" when relevant
+- Update memories incrementally as you research (don't wait until the end)
+
+**Good memories:**
+- "Uses Bun runtime and package manager. Commands: bun install, bun run dev, bun test"
+- "API routes in src/routes/, handlers in src/handlers/. Hono framework."
+- "Auth uses Redis sessions, not JWT. Implementation in src/lib/auth.ts"
+- "Never use \`any\` type - strict TypeScript. Use \`unknown\` and narrow."
+- "Database migrations must be backward compatible - we do rolling deploys"
+
+## Upfront Questions
+
+Before diving in, ask:
+1. "Any specific rules I should always follow?"
+2. "Preferences for how I communicate? (terse/detailed)"
+
+## Reflection Phase
+
+Before finishing, reflect:
+1. **Completeness**: Did you cover commands, architecture, conventions, gotchas?
+2. **Quality**: Are memories concise and searchable?
+3. **Scope**: Did you correctly separate project vs user knowledge?
+
+Then ask: "I've initialized memory with X insights. Want me to continue refining, or is this good?"
+
+## Your Task
+
+1. Ask upfront questions (research depth, rules, preferences)
+2. Check existing memories first: \`supermemory(mode: "list", scope: "project")\`
+3. Auto-detect the ecosystem(s), then research based on chosen depth
+4. Save memories incrementally as you discover insights
+5. Reflect and verify completeness
+6. Summarize what was learned and ask if user wants refinement
+`
+
+const SUPERMEMORY_LOGIN_COMMAND = `---
+description: Authenticate with Supermemory via browser
+---
+
+# Supermemory Login
+
+Run this command to authenticate the user with Supermemory:
+
+\`\`\`bash
+bunx opencode-supermemory@latest login
+\`\`\`
+
+This will:
+1. Start a local server on port 19877
+2. Open the browser to Supermemory's authentication page
+3. After the user logs in, save credentials to ~/.supermemory-opencode/credentials.json
+
+Wait for the command to complete, then inform the user whether authentication succeeded or failed.
+
+If the user wants to log out instead, tell them to use the /supermemory-logout command.
+`;
+
+const SUPERMEMORY_LOGOUT_COMMAND = `---
+description: Log out from Supermemory and clear credentials
+---
+
+# Supermemory Logout
+
+Run this command to log out and clear Supermemory credentials:
+
+\`\`\`bash
+bunx opencode-supermemory@latest logout
+\`\`\`
+
+This will remove the saved credentials from ~/.supermemory-opencode/credentials.json.
+
+Inform the user whether logout succeeded and that they'll need to run /supermemory-login to re-authenticate.
+`;
+
+const SUPERMEMORY_STATUS_COMMAND = `---
+description: Show Supermemory connection status
+---
+
+# Supermemory Status
+
+Run this command to check whether OpenCode is connected to Supermemory:
+
+\`\`\`bash
+bunx opencode-supermemory@latest status
+\`\`\`
+
+Report the connection status, credential source, API URL, and account information if available.
+
+Never print the full API key.
+`;
+
+function createReadline(): readline.Interface {
+  return readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+}
+
+async function confirm(rl: readline.Interface, question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    rl.question(`${question} (y/n) `, (answer) => {
+      resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes");
+    });
+  });
+}
+
+function findOpencodeConfig(): string | null {
+  const candidates = [
+    join(OPENCODE_CONFIG_DIR, "opencode.jsonc"),
+    join(OPENCODE_CONFIG_DIR, "opencode.json"),
+  ];
+
+  for (const path of candidates) {
+    if (existsSync(path)) {
+      return path;
+    }
+  }
+
+  return null;
+}
+
+function addPluginToConfig(configPath: string): boolean {
+  try {
+    const content = readFileSync(configPath, "utf-8");
+    const result = editOpenCodeConfig(content);
+
+    if (result.changed) {
+      writeFileSync(configPath, result.content);
+      console.log(`✓ Registered plugin for OpenCode V1 ("plugin") and OpenCode 2 ("plugins") in ${configPath}`);
+    } else {
+      console.log("✓ Plugin already registered for OpenCode V1 and OpenCode 2");
+    }
+
+    for (const warning of result.warnings) {
+      console.warn(`⚠ ${warning}`);
+    }
+    return true;
+  } catch (err) {
+    console.error("✗ Failed to update config:", err);
+    return false;
+  }
+}
+
+function createNewConfig(): boolean {
+  const configPath = join(OPENCODE_CONFIG_DIR, "opencode.jsonc");
+  mkdirSync(OPENCODE_CONFIG_DIR, { recursive: true });
+
+  const config = editOpenCodeConfig("{}\n");
+  writeFileSync(configPath, config.content);
+  console.log(`✓ Created ${configPath}`);
+  return true;
+}
+
+function configureTuiPlugin(): boolean {
+  const configPath = OPENCODE_TUI_CONFIGS.find((path) => existsSync(path)) ?? OPENCODE_TUI_CONFIGS[0]!;
+  try {
+    const content = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
+    const result = editOpenCodeTuiConfig(content);
+    if (result.changed) {
+      mkdirSync(OPENCODE_CONFIG_DIR, { recursive: true });
+      writeFileSync(configPath, result.content);
+      console.log(`✓ Enabled the persistent Supermemory footer for OpenCode V1 in ${configPath}`);
+    } else {
+      console.log("✓ Persistent Supermemory footer already enabled for OpenCode V1");
+    }
+    console.log("  OpenCode 2 loads the footer automatically from the plugin package.");
+    return true;
+  } catch (err) {
+    console.error("✗ Failed to update TUI config:", err);
+    return false;
+  }
+}
+
+function createCommands(): boolean {
+  const files: Array<[string, string]> = [
+    ["supermemory-index.md", SUPERMEMORY_INDEX_COMMAND],
+    ["supermemory-init.md", SUPERMEMORY_INDEX_COMMAND],
+    ["supermemory-login.md", SUPERMEMORY_LOGIN_COMMAND],
+    ["supermemory-logout.md", SUPERMEMORY_LOGOUT_COMMAND],
+    ["supermemory-status.md", SUPERMEMORY_STATUS_COMMAND],
+  ];
+
+  for (const dir of OPENCODE_COMMAND_DIRS) {
+    mkdirSync(dir, { recursive: true });
+    for (const [name, body] of files) {
+      writeFileSync(join(dir, name), body);
+    }
+  }
+
+  console.log(`✓ Created /supermemory-index command`);
+  console.log(`✓ Created /supermemory-init command`);
+  console.log(`✓ Created /supermemory-login command`);
+  console.log(`✓ Created /supermemory-logout command`);
+  console.log(`✓ Created /supermemory-status command`);
+
+  return true;
+}
+
+function isOhMyOpencodeInstalled(): boolean {
+  const configPath = findOpencodeConfig();
+  if (!configPath) return false;
+  
+  try {
+    const content = readFileSync(configPath, "utf-8");
+    return content.includes("oh-my-opencode");
+  } catch {
+    return false;
+  }
+}
+
+function isAutoCompactAlreadyDisabled(): boolean {
+  if (!existsSync(OH_MY_OPENCODE_CONFIG)) return false;
+  
+  try {
+    const content = readFileSync(OH_MY_OPENCODE_CONFIG, "utf-8");
+    const config = JSON.parse(content);
+    const disabledHooks = config.disabled_hooks as string[] | undefined;
+    return disabledHooks?.includes("anthropic-context-window-limit-recovery") ?? false;
+  } catch {
+    return false;
+  }
+}
+
+function disableAutoCompactHook(): boolean {
+  try {
+    let config: Record<string, unknown> = {};
+    
+    if (existsSync(OH_MY_OPENCODE_CONFIG)) {
+      const content = readFileSync(OH_MY_OPENCODE_CONFIG, "utf-8");
+      config = JSON.parse(content);
+    }
+    
+    const disabledHooks = (config.disabled_hooks as string[]) || [];
+    if (!disabledHooks.includes("anthropic-context-window-limit-recovery")) {
+      disabledHooks.push("anthropic-context-window-limit-recovery");
+    }
+    config.disabled_hooks = disabledHooks;
+    
+    writeFileSync(OH_MY_OPENCODE_CONFIG, JSON.stringify(config, null, 2));
+    console.log(`✓ Disabled anthropic-context-window-limit-recovery hook in oh-my-opencode.json`);
+    return true;
+  } catch (err) {
+    console.error("✗ Failed to update oh-my-opencode.json:", err);
+    return false;
+  }
+}
+
+interface InstallOptions {
+  tui: boolean;
+  disableAutoCompact: boolean;
+}
+
+async function install(options: InstallOptions): Promise<number> {
+  console.log("\n🧠 opencode-supermemory installer\n");
+
+  mkdirSync(OPENCODE_CONFIG_DIR, { recursive: true });
+  writeInstallDefaults(existsSync(DEFAULT_CONFIG_FILE));
+
+  const rl = options.tui ? createReadline() : null;
+
+  // Step 1: Register plugin in config
+  console.log("Step 1: Register plugin in OpenCode config (OpenCode V1 and OpenCode 2)");
+  const configPath = findOpencodeConfig();
+  
+  if (configPath) {
+    if (options.tui) {
+      const shouldModify = await confirm(rl!, `Add plugin to ${configPath}?`);
+      if (!shouldModify) {
+        console.log("Skipped.");
+      } else {
+        addPluginToConfig(configPath);
+      }
+    } else {
+      addPluginToConfig(configPath);
+    }
+  } else {
+    if (options.tui) {
+      const shouldCreate = await confirm(rl!, "No OpenCode config found. Create one?");
+      if (!shouldCreate) {
+        console.log("Skipped.");
+      } else {
+        createNewConfig();
+      }
+    } else {
+      createNewConfig();
+    }
+  }
+
+  configureTuiPlugin();
+
+  // Step 2: Create commands
+  console.log("\nStep 2: Create /supermemory-index, /supermemory-init, /supermemory-login, /supermemory-logout, and /supermemory-status commands");
+  if (options.tui) {
+    const shouldCreate = await confirm(rl!, "Add supermemory commands?");
+    if (!shouldCreate) {
+      console.log("Skipped.");
+    } else {
+      createCommands();
+    }
+  } else {
+    createCommands();
+  }
+
+  // Step 3: Configure Oh My OpenCode (if installed)
+  if (isOhMyOpencodeInstalled()) {
+    console.log("\nStep 3: Configure Oh My OpenCode");
+    console.log("Detected Oh My OpenCode plugin.");
+    console.log("Supermemory handles context compaction, so the built-in context-window-limit-recovery hook should be disabled.");
+    
+    if (isAutoCompactAlreadyDisabled()) {
+      console.log("✓ anthropic-context-window-limit-recovery hook already disabled");
+    } else {
+      if (options.tui) {
+        const shouldDisable = await confirm(rl!, "Disable anthropic-context-window-limit-recovery hook to let Supermemory handle context?");
+        if (!shouldDisable) {
+          console.log("Skipped.");
+        } else {
+          disableAutoCompactHook();
+        }
+      } else if (options.disableAutoCompact) {
+        disableAutoCompactHook();
+      } else {
+        console.log("Skipped. Use --disable-context-recovery to disable the hook in non-interactive mode.");
+      }
+    }
+  }
+
+  if (rl) rl.close();
+
+  // Step 4: Authenticate
+  console.log("\n" + "─".repeat(50));
+  console.log("\n🔑 Final step: Authenticate with Supermemory\n");
+
+  if (options.tui) {
+    return login();
+  }
+
+  // Non-interactive mode - print instructions
+  console.log("Run this command to authenticate:");
+  console.log("  bunx opencode-supermemory@latest login");
+  console.log("\nOr set your API key manually:");
+  console.log('  export SUPERMEMORY_API_KEY="sm_..."');
+  console.log("\n" + "─".repeat(50));
+  console.log("\n✓ Setup complete! Restart OpenCode (V1 and/or OpenCode 2) to activate.\n");
+  return 0;
+}
+
+async function login(): Promise<number> {
+  const existing = loadCredentials();
+  if (existing) {
+    console.log("Already authenticated. Use 'logout' first to re-authenticate.");
+    return 0;
+  }
+
+  const result = await startAuthFlow();
+
+  if (result.success) {
+    console.log("\n✓ Successfully authenticated with Supermemory!");
+    console.log("Restart OpenCode to activate.\n");
+    return 0;
+  } else {
+    console.error(`\n✗ Authentication failed: ${result.error}`);
+    return 1;
+  }
+}
+
+function maskKey(key: string | undefined): string {
+  if (!key) return "not set";
+  if (key.length <= 12) return `${key.slice(0, 4)}...`;
+  return `${key.slice(0, 6)}...${key.slice(-4)}`;
+}
+
+function getConfiguredApiKeyFromFile(): string | undefined {
+  try {
+    if (!existsSync(DEFAULT_CONFIG_FILE)) return undefined;
+    const parsed = JSON.parse(readFileSync(DEFAULT_CONFIG_FILE, "utf-8")) as { apiKey?: string };
+    return parsed.apiKey;
+  } catch {
+    return undefined;
+  }
+}
+
+function getKeySource(): string {
+  if (process.env.SUPERMEMORY_API_KEY) return "SUPERMEMORY_API_KEY env var";
+  if (getConfiguredApiKeyFromFile()) return DEFAULT_CONFIG_FILE;
+  if (loadCredentials()) return CREDENTIALS_FILE;
+  return "not configured";
+}
+
+function getDevTlsHint(apiUrl: string): string | null {
+  if (!apiUrl.includes(".dev.supermemory.ai")) return null;
+  if (process.env.NODE_EXTRA_CA_CERTS) return null;
+  return "Dev API TLS: set NODE_EXTRA_CA_CERTS to your Portless CA before starting OpenCode.";
+}
+
+async function fetchJson(apiUrl: string, path: string): Promise<unknown | null> {
+  if (!SUPERMEMORY_API_KEY) return null;
+  try {
+    const response = await fetch(`${apiUrl}${path}`, {
+      headers: {
+        Authorization: `Bearer ${SUPERMEMORY_API_KEY}`,
+        "x-sm-source": "opencode",
+      },
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+async function getAccountInfo(apiUrl: string): Promise<{ email?: string; name?: string; userId?: string; orgName?: string }> {
+  // /session is the unversioned path; older API servers only serve /v3/session.
+  const data = (await fetchJson(apiUrl, "/session")) ?? (await fetchJson(apiUrl, "/v3/session"));
+  if (!data || typeof data !== "object") return {};
+
+  const session = data as {
+    user?: { email?: unknown; name?: unknown; id?: unknown };
+    org?: { name?: unknown };
+  };
+  return {
+    email: typeof session.user?.email === "string" ? session.user.email : undefined,
+    name: typeof session.user?.name === "string" ? session.user.name : undefined,
+    userId: typeof session.user?.id === "string" ? session.user.id : undefined,
+    orgName: typeof session.org?.name === "string" ? session.org.name : undefined,
+  };
+}
+
+function describeOpenCodeRegistration(): string[] {
+  const configPath = findOpencodeConfig();
+  if (!configPath) {
+    return [`OpenCode config: not found (run \`bunx opencode-supermemory@latest install\`)`];
+  }
+  try {
+    const registration = readOpenCodeRegistration(readFileSync(configPath, "utf-8"));
+    const v2Permission = registration.recallDenied
+      ? "recall denied"
+      : registration.recallAllowed
+        ? "recall auto-allowed"
+        : "default permissions";
+    const tuiConfig = OPENCODE_TUI_CONFIGS.find((path) => existsSync(path));
+    let tuiFooter = "missing (re-run install)";
+    if (tuiConfig) {
+      try {
+        if (readOpenCodeTuiRegistration(readFileSync(tuiConfig, "utf-8"))) {
+          tuiFooter = `registered (${tuiConfig})`;
+        }
+      } catch {
+        tuiFooter = `unreadable (${tuiConfig})`;
+      }
+    }
+    return [
+      `OpenCode config: ${configPath}`,
+      `OpenCode V1 plugin entry: ${registration.v1 ? "registered" : `missing (add \"${V1_PLUGIN_ENTRY}\" to \"plugin\")`}`,
+      `OpenCode V1 TUI footer: ${tuiFooter}`,
+      `OpenCode 2 plugin entry: ${registration.v2 ? `registered (${v2Permission}; footer loads automatically)` : `missing (add \"${V2_PLUGIN_ENTRY}\" to \"plugins\")`}`,
+    ];
+  } catch (error) {
+    return [`OpenCode config: ${configPath} (unreadable: ${error instanceof Error ? error.message : String(error)})`];
+  }
+}
+
+async function status(): Promise<number> {
+  const apiUrl = getApiBaseUrl();
+  const tags = getTags(process.cwd());
+  const lines: string[] = [];
+
+  lines.push("supermemory status");
+  lines.push("");
+  lines.push(`Connected: ${isConfigured() ? "checking..." : "no"}`);
+  lines.push(`API key: ${maskKey(SUPERMEMORY_API_KEY)} (${getKeySource()})`);
+  lines.push(`API URL: ${apiUrl}`);
+  lines.push("Memory scope: unified project container with personal/project metadata");
+  lines.push(`Recall mode: ${CONFIG.recallMode}`);
+  lines.push(`Recall directive: ${CONFIG.recallMode === "advisory" && CONFIG.recallDirective ? "custom" : "default"}`);
+  lines.push(`Capture cadence: ${CONFIG.captureEveryNTurns > 0 ? `every ${CONFIG.captureEveryNTurns} turn${CONFIG.captureEveryNTurns === 1 ? "" : "s"} + session end` : "session end only"}`);
+  lines.push(`Project container: ${tags.canonical}`);
+  lines.push(`Personal reads: ${tags.personalReads.join(", ")}`);
+  lines.push(`Project reads: ${tags.projectReads.join(", ")}`);
+  lines.push(...describeOpenCodeRegistration());
+
+  if (!isConfigured()) {
+    lines.push("");
+    lines.push("Run /supermemory-login to connect, or set SUPERMEMORY_API_KEY.");
+    console.log(lines.join("\n"));
+    return 0;
+  }
+
+  const client = new SupermemoryClient();
+  const [profileResult, accountInfo] = await Promise.all([
+    client.getProfileScoped(
+      tags.canonical,
+      tags.personalReads,
+      "personal",
+    ),
+    getAccountInfo(apiUrl),
+  ]);
+
+  lines[2] = profileResult.success ? "Connected: yes" : "Connected: no";
+
+  if (accountInfo.email || accountInfo.name || accountInfo.userId || accountInfo.orgName) {
+    lines.push("");
+    lines.push("Account:");
+    if (accountInfo.email) lines.push(`Email: ${accountInfo.email}`);
+    if (accountInfo.name) lines.push(`Name: ${accountInfo.name}`);
+    if (accountInfo.userId) lines.push(`User ID: ${accountInfo.userId}`);
+    if (accountInfo.orgName) lines.push(`Organization: ${accountInfo.orgName}`);
+  } else {
+    lines.push("");
+    lines.push("Account: authenticated API key (account details unavailable from API key)");
+  }
+
+  if (!profileResult.success) {
+    lines.push("");
+    lines.push(`Connection check failed: ${profileResult.error}`);
+    const devTlsHint = getDevTlsHint(apiUrl);
+    if (devTlsHint) lines.push(devTlsHint);
+  }
+
+  console.log(lines.join("\n"));
+  return 0;
+}
+
+function logout(): number {
+  if (clearCredentials()) {
+    console.log("✓ Logged out. Credentials cleared.");
+    console.log("This only logs out this local OpenCode install. To revoke the account-level OpenCode integration key, disconnect it from the Supermemory integrations page.");
+    if (process.env.SUPERMEMORY_API_KEY) {
+      console.log("SUPERMEMORY_API_KEY is still set in this shell, so memory may remain active until you unset it or restart OpenCode.");
+    }
+    return 0;
+  } else {
+    console.log("No credentials found.");
+    if (process.env.SUPERMEMORY_API_KEY) {
+      console.log("SUPERMEMORY_API_KEY is still set in this shell.");
+    }
+    return 0;
+  }
+}
+
+function printHelp(): void {
+  console.log(`
+opencode-supermemory - Persistent memory for OpenCode agents
+
+Commands:
+  install    Install and configure the plugin
+    --no-tui                     Non-interactive mode (for LLM agents)
+    --disable-context-recovery   Disable Oh My OpenCode's context hook
+  login      Authenticate with Supermemory (opens browser)
+  logout     Clear stored credentials
+  status     Show Supermemory connection status
+
+Examples:
+  bunx opencode-supermemory@latest install
+  bunx opencode-supermemory@latest login
+  bunx opencode-supermemory@latest logout
+  bunx opencode-supermemory@latest status
+`);
+}
+
+const args = process.argv.slice(2);
+
+if (args.length === 0 || args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
+  printHelp();
+  process.exit(0);
+}
+
+if (args[0] === "install") {
+  const noTui = args.includes("--no-tui");
+  const disableAutoCompact = args.includes("--disable-context-recovery");
+  install({ tui: !noTui, disableAutoCompact }).then((code) => process.exit(code));
+} else if (args[0] === "setup") {
+  console.log("Note: 'setup' is deprecated. Use 'install' instead.\n");
+  const noTui = args.includes("--no-tui");
+  const disableAutoCompact = args.includes("--disable-context-recovery");
+  install({ tui: !noTui, disableAutoCompact }).then((code) => process.exit(code));
+} else if (args[0] === "login") {
+  login().then((code) => process.exit(code));
+} else if (args[0] === "logout") {
+  process.exit(logout());
+} else if (args[0] === "status") {
+  status().then((code) => process.exit(code));
+} else {
+  console.error(`Unknown command: ${args[0]}`);
+  printHelp();
+  process.exit(1);
+}
